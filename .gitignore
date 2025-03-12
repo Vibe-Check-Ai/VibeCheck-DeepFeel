@@ -1,2 +1,57 @@
-.mp4
-.csv
+# ========================================
+# MELD Dataset - Ignore all dataset files
+# ========================================
+MELD.Raw/
+MELD.Raw.tar.gz
+MELD.Raw.tar
+MELD.Raw/**/*.csv
+MELD.Raw/**/*.txt
+MELD.Raw/**/*.gz
+
+# ========================================
+# Virtual Environment
+# ========================================
+.venv/
+venv/
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ========================================
+# Python Bytecode, Cache & Logs
+# ========================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.out
+
+# ========================================
+# Jupyter Notebook Files
+# ========================================
+.ipynb_checkpoints/
+*.checkpoint
+*.ipynb_checkpoints/
+
+# ========================================
+# IDE & Editor Specific Files
+# ========================================
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# ========================================
+# Operating System Files
+# ========================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========================================
+# Git & Build Artifacts
+# ========================================
+.gitattributes
+.gitignore
+*.lock
