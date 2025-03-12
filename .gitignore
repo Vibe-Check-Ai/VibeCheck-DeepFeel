@@ -1,12 +1,22 @@
 # ========================================
 # MELD Dataset - Ignore all dataset files
 # ========================================
-MELD.Raw/
-MELD.Raw.tar.gz
-MELD.Raw.tar
-MELD.Raw/**/*.csv
-MELD.Raw/**/*.txt
-MELD.Raw/**/*.gz
+
+# Un-ignore the README.txt file specifically
+!Dataset/README.txt
+
+# Ignore all files inside the MELD.Raw directory
+Dataset/MELD.Raw/*
+
+# Ignore archive files (tar.gz, tar)
+Dataset/MELD.Raw.tar.gz
+Dataset/MELD.Raw.tar
+
+# Ignore all CSV, TXT, GZ and MP4 files inside any subdirectory under MELD.Raw
+Dataset/MELD.Raw/**/*.csv
+Dataset/MELD.Raw/**/*.gz
+Dataset/MELD.Raw/**/*.txt
+Dataset/MELD.Raw/**/**/*.mp4
 
 # ========================================
 # Virtual Environment
