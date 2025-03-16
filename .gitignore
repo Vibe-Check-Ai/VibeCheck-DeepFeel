@@ -8,9 +8,14 @@
 # Ignore all files inside the MELD.Raw directory
 Dataset/MELD.Raw/*
 
+# Ignore all files inside the MELD.Features.Models directory
+Dataset/MELD.Features.Models/*
+
 # Ignore archive files (tar.gz, tar)
 Dataset/MELD.Raw.tar.gz
 Dataset/MELD.Raw.tar
+
+Dataset/MELD.Features.Models.tar.gz
 
 # Ignore all CSV, TXT, GZ and MP4 files inside any subdirectory under MELD.Raw
 Dataset/MELD.Raw/**/*.csv
