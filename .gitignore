@@ -23,6 +23,12 @@ Dataset/MELD.Raw/**/*.gz
 Dataset/MELD.Raw/**/*.txt
 Dataset/MELD.Raw/**/**/*.mp4
 
+#=========================================
+# Training Cache - Ignore all training cache files 
+#=========================================
+# Ignore the entire meld_cache directory and its contents
+meld_cache/
+
 # ========================================
 # Virtual Environment
 # ========================================
