@@ -1,4 +1,17 @@
 import os
+import logging
+import psutil
+
+# Log memory usage before imports
+process = psutil.Process()
+logging.basicConfig(
+    level=logging.INFO,
+    format='[ %(asctime)s ] - %(name)s - [ %(levelname)s ] ---->> %(message)s'
+)
+logger = logging.getLogger("MELDDataset")
+logger.info(f"Memory usage before imports: {process.memory_info().rss / 1024**2:.2f} MB")
+
+# Perform imports
 import cv2
 import torch
 import torchaudio
@@ -6,22 +19,17 @@ import subprocess
 import numpy as np
 import pandas as pd
 import hashlib
-import logging
 import multiprocessing
+
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
-
 from torch.utils.data import Dataset, DataLoader
 from torchaudio.transforms import MelSpectrogram
 from transformers import AutoTokenizer
 from torchvision import transforms
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("MELDDataset")
+# Log memory usage after imports
+logger.info(f"Memory usage after imports: {process.memory_info().rss / 1024**2:.2f} MB")
 
 # Prevent tokenizer parallelism warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -36,7 +44,8 @@ class MELDDataset(Dataset):
                  frame_size=(224, 224), 
                  mel_bands=64,
                  is_training=False,
-                 preprocess_audio=False):
+                 preprocess_audio=False,
+                 max_samples=None):
         """
         Initialize the MELD Dataset
         
@@ -50,6 +59,7 @@ class MELDDataset(Dataset):
             mel_bands (int): Number of MEL bands for audio processing
             is_training (bool): Whether this dataset is for training (enables augmentations)
             preprocess_audio (bool): Whether to pre-extract all audio files
+            max_samples (int): Maximum number of samples to load (None for all)
         """
         self.csv_path = csv_path
         self.video_dir = video_dir
@@ -59,10 +69,8 @@ class MELDDataset(Dataset):
         self.frame_size = frame_size
         self.mel_bands = mel_bands
         self.is_training = is_training
+        self.max_samples = max_samples
         
-        # Initialize tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-
         # Create cache directories if needed
         if cache_dir and not os.path.exists(cache_dir):
             os.makedirs(cache_dir)
@@ -96,16 +104,81 @@ class MELDDataset(Dataset):
             "other_error": 0
         }
         
-        # Load the data
+        # Load the data with memory optimization
         abs_path = os.path.abspath(csv_path)
         logger.info(f"Attempting to read file from: {abs_path}")
 
         if not os.path.exists(csv_path):
             raise FileNotFoundError(f"File not found: {abs_path}")
 
-        self.data = pd.read_csv(csv_path)
-        logger.info(f"Data loaded Successfully from: {abs_path}")
-        logger.info(f"Dataset contains {len(self.data)} samples")
+        # Define dtypes to reduce memory usage
+        dtypes = {
+            'Dialogue_ID': 'int32',
+            'Utterance_ID': 'int32',
+            'Speaker': 'category',
+            'Emotion': 'category',
+            'Sentiment': 'category'
+        }
+        
+        # Define columns to load (exclude unused columns like Season, Episode)
+        usecols = ['Utterance', 'Speaker', 'Emotion', 'Sentiment', 'Dialogue_ID', 'Utterance_ID']
+        
+        # Validate usecols against CSV columns
+        try:
+            header = pd.read_csv(csv_path, nrows=0)
+            available_columns = header.columns.tolist()
+            valid_usecols = [col for col in usecols if col in available_columns]
+            if len(valid_usecols) < len(usecols):
+                missing_cols = [col for col in usecols if col not in available_columns]
+                logger.warning(f"Columns not found in CSV: {missing_cols}. Using available columns: {valid_usecols}")
+            if not valid_usecols:
+                raise ValueError("No valid columns specified in usecols")
+        except Exception as e:
+            logger.error(f"Error validating CSV columns: {str(e)}")
+            raise
+
+        # Update dtypes to match valid_uscols
+        valid_dtypes = {k: v for k, v in dtypes.items() if k in valid_usecols}
+        
+        # Validate CSV file size and accessibility
+        try:
+            file_size = os.path.getsize(csv_path) / (1024 * 1024)  # Size in MB
+            logger.info(f"CSV file size: {file_size:.2f} MB")
+        except Exception as e:
+            logger.error(f"Error accessing CSV file: {str(e)}")
+            raise
+
+        # Log memory usage before loading CSV
+        process = psutil.Process()
+        logger.info(f"Memory usage before CSV load: {process.memory_info().rss / 1024**2:.2f} MB")
+
+        # Read CSV in chunks to prevent out-of-memory errors
+        chunks = []
+        chunk_size = 1000  # Process 1000 rows at a time
+        try:
+            for chunk in pd.read_csv(csv_path, dtype=valid_dtypes, usecols=valid_usecols, chunksize=chunk_size):
+                chunks.append(chunk)
+            self.data = pd.concat(chunks, ignore_index=True)
+            if self.max_samples is not None:
+                self.data = self.data.iloc[:self.max_samples]
+            logger.info(f"Data loaded successfully from: {abs_path}")
+            logger.info(f"Dataset contains {len(self.data)} samples")
+        except Exception as e:
+            logger.warning(f"C parser failed: {str(e)}. Falling back to python engine.")
+            chunks = []
+            for chunk in pd.read_csv(csv_path, dtype=valid_dtypes, usecols=valid_usecols, chunksize=chunk_size, engine='python'):
+                chunks.append(chunk)
+            self.data = pd.concat(chunks, ignore_index=True)
+            if self.max_samples is not None:
+                self.data = self.data.iloc[:self.max_samples]
+            logger.info(f"Data loaded successfully with python engine from: {abs_path}")
+            logger.info(f"Dataset contains {len(self.data)} samples")
+        
+        # Log memory usage after loading CSV
+        logger.info(f"Memory usage after CSV load: {process.memory_info().rss / 1024**2:.2f} MB")
+
+        # Initialize tokenizer after CSV loading to reduce memory usage
+        self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
         
         # Data augmentation for training
         if is_training:
@@ -134,7 +207,7 @@ class MELDDataset(Dataset):
         if not os.path.exists(audio_dir):
             os.makedirs(audio_dir)
             
-        # Create a list of videos to process
+        # Create a list of videos to process with validation
         videos_to_process = []
         for idx, row in self.data.iterrows():
             video_filename = f"dia{row['Dialogue_ID']}_utt{row['Utterance_ID']}.mp4"
@@ -142,26 +215,41 @@ class MELDDataset(Dataset):
             audio_path = os.path.join(audio_dir, video_filename.replace(".mp4", ".wav"))
             
             if not os.path.exists(audio_path) and os.path.exists(video_path):
-                videos_to_process.append((video_path, audio_path))
+                # Validate video file before adding to process list
+                try:
+                    cap = cv2.VideoCapture(video_path)
+                    if not cap.isOpened():
+                        logger.warning(f"Skipping invalid video: {video_path}")
+                        self.error_counts["video_load_error"] += 1
+                        continue
+                    cap.release()
+                    videos_to_process.append((video_path, audio_path))
+                except Exception as e:
+                    logger.warning(f"Error validating video {video_path}: {e}")
+                    self.error_counts["video_load_error"] += 1
+        
+        # Process videos in batches to manage memory usage
+        batch_size = 100
+        for i in range(0, len(videos_to_process), batch_size):
+            batch = videos_to_process[i:i + batch_size]
+            logger.info(f"Processing batch {i//batch_size + 1}/{len(videos_to_process)//batch_size + 1}")
+            with ThreadPoolExecutor(max_workers=8) as executor:  # Increased to 8 for faster processing
+                list(executor.map(self._extract_audio_file, batch))
                 
-        # Process videos in parallel
-        with ThreadPoolExecutor(max_workers=min(8, multiprocessing.cpu_count())) as executor:
-            list(executor.map(self._extract_audio_file, videos_to_process))
-            
         logger.info(f"Audio extraction completed. {len(videos_to_process)} files processed.")
         
     def _extract_audio_file(self, paths):
-        """Extract audio file from video"""
+        """Extract audio file from video with improved error handling"""
         video_path, audio_path = paths
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le", 
                  "-ar", "16000", "-ac", "1", audio_path],
-                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
             )
             return True
         except subprocess.CalledProcessError as e:
-            logger.warning(f"Error extracting audio from {video_path}: {e}")
+            logger.warning(f"Error extracting audio from {video_path}: {e.stderr.decode()}")
             self.error_counts["audio_extract_error"] += 1
             return False
         
@@ -256,21 +344,25 @@ class MELDDataset(Dataset):
             return torch.load(cache_path)
             
         audio_dir = os.path.join(self.cache_dir, "audio") if self.cache_dir else None
+        audio_path = None
         if audio_dir and os.path.exists(audio_dir):
             audio_path = os.path.join(audio_dir, os.path.basename(video_path).replace(".mp4", ".wav"))
-        else:
+            if os.path.exists(audio_path):
+                logger.info(f"Using pre-extracted audio: {audio_path}")
+            else:
+                audio_path = None
+        
+        if audio_path is None:
             audio_path = video_path.replace(".mp4", ".wav")
-            
-        try:
-            if not os.path.exists(audio_path):
-                logger.info(f"Extracting audio from {video_path}")
-                subprocess.run(
-                    ["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le", 
-                     "-ar", "16000", "-ac", "1", audio_path],
-                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
-                logger.info("Audio Features Extracted Successfully")
+            logger.info(f"Extracting audio from {video_path}")
+            subprocess.run(
+                ["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le", 
+                 "-ar", "16000", "-ac", "1", audio_path],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            logger.info("Audio Features Extracted Successfully")
 
+        try:
             waveform, sample_rate = torchaudio.load(audio_path)
 
             if sample_rate != 16000:
@@ -391,9 +483,13 @@ class MELDDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, index):
-        """Get a sample from the dataset with error handling"""
+        """Get a sample from the dataset with error handling and memory logging"""
         if isinstance(index, torch.Tensor):
             index = index.item()
+
+        # Log memory usage before processing the sample
+        process = psutil.Process()
+        logger.info(f"Memory usage before processing sample {index}: {process.memory_info().rss / 1024**2:.2f} MB")
 
         row = self.data.iloc[index]
         
@@ -418,6 +514,9 @@ class MELDDataset(Dataset):
 
             emotion_label = self.emotion_map[row["Emotion"].lower()]
             sentiment_label = self.sentiment_map[row["Sentiment"].lower()]
+
+            # Log memory usage after processing the sample
+            logger.info(f"Memory usage after processing sample {index}: {process.memory_info().rss / 1024**2:.2f} MB")
 
             return {
                 "text_inputs": {
@@ -490,7 +589,7 @@ def collate_fn(batch):
 def prepare_dataloaders(train_csv, train_video_dir, dev_csv, dev_video_dir, 
                         test_csv, test_video_dir, batch_size=32, cache_dir=None,
                         num_workers=4, video_frames=30, audio_frames=300,
-                        preprocess_audio=True):
+                        preprocess_audio=False, max_samples=None):
     """
     Create train, validation and test dataloaders with optimized settings
     
@@ -507,6 +606,7 @@ def prepare_dataloaders(train_csv, train_video_dir, dev_csv, dev_video_dir,
         video_frames (int): Number of video frames to extract
         audio_frames (int): Number of audio frames to extract
         preprocess_audio (bool): Whether to pre-extract all audio files
+        max_samples (int): Maximum number of samples to load (None for all)
         
     Returns:
         tuple: (train_loader, dev_loader, test_loader)
@@ -523,7 +623,8 @@ def prepare_dataloaders(train_csv, train_video_dir, dev_csv, dev_video_dir,
         video_frames=video_frames, 
         audio_frames=audio_frames,
         is_training=True,
-        preprocess_audio=preprocess_audio
+        preprocess_audio=preprocess_audio,
+        max_samples=max_samples
     )
     
     train_dataset.analyze_video_statistics()
@@ -535,7 +636,8 @@ def prepare_dataloaders(train_csv, train_video_dir, dev_csv, dev_video_dir,
         video_frames=video_frames, 
         audio_frames=audio_frames,
         is_training=False,
-        preprocess_audio=preprocess_audio
+        preprocess_audio=preprocess_audio,
+        max_samples=max_samples
     )
     
     logger.info("Creating test dataset...")
@@ -545,8 +647,13 @@ def prepare_dataloaders(train_csv, train_video_dir, dev_csv, dev_video_dir,
         video_frames=video_frames, 
         audio_frames=audio_frames,
         is_training=False,
-        preprocess_audio=preprocess_audio
+        preprocess_audio=preprocess_audio,
+        max_samples=max_samples
     )
+
+    # Log memory usage before initializing DataLoader
+    process = psutil.Process()
+    logger.info(f"Memory usage before DataLoader initialization: {process.memory_info().rss / 1024**2:.2f} MB")
 
     train_loader = DataLoader(
         train_dataset, 
@@ -600,10 +707,11 @@ if __name__ == "__main__":
         "../Dataset/MELD.Raw/test/output_repeated_splits_test",
         batch_size=16,
         cache_dir="./meld_cache",
-        num_workers=4,
+        num_workers=8,  # -- [2, 4, 8] for Multiprocessing --
         video_frames=30,
         audio_frames=300,
-        preprocess_audio=True
+        preprocess_audio=True,
+        max_samples=None  # Process full dataset
     )
     
     logger.info("Testing training dataloader...")
