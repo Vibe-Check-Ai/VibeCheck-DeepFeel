@@ -245,7 +245,69 @@ class MultimodalSentimentModel(nn.Module):
             "sentiments": sentiment_output
         }
 ### ================================================================ ###
+# Compute Class Weights
+# - Input: MELD Dataset
+# - Output:
+# -- Emotion Weights: Tensor of size 7
+# -- Sentiment Weights: Tensor of size 3
+def compute_class_weights(dataset):
+    # Compute class distributions for emotions and sentiments
+    # - Emotion Labels: 7 Classes (Anger, Disgust, Sadness, Joy, Neutral, Surprise and Fear)
+    # - Sentiment Labels: 3 Classes (Positive, Negative, Neutral)
+    # - Emotion Counts: Tensor of size 7
+    # - Sentiment Counts: Tensor of size 3
+    # - Skipped Samples: 0
+    # - Total Samples: Length of the dataset
+    emotion_counts = torch.zeros(7)
+    sentiment_counts = torch.zeros(3)
+    skipped = 0
+    total = len(dataset)
 
+    print("\Counting class distributions...")
+    for i in range(total):
+        sample = dataset[i]
+
+        if sample is None:
+            skipped += 1
+            continue
+
+        emotion_label = sample['emotion_label']
+        sentiment_label = sample['sentiment_label']
+
+        emotion_counts[emotion_label] += 1
+        sentiment_counts[sentiment_label] += 1
+
+    # Total Samples: Length of the dataset
+    # Valid Samples: Total Samples - Skipped Samples
+    valid = total - skipped
+    print(f"Skipped samples: {skipped}/{total}")
+
+    # Print class distributions
+    print("\nClass distribution")
+    print("Emotions:")
+    emotion_map = {0: 'anger', 1: 'disgust', 2: 'fear',
+                   3: 'joy', 4: 'neutral', 5: 'sadness', 6: 'surprise'}
+    for i, count in enumerate(emotion_counts):
+        print(f"{emotion_map[i]}: {count/valid:.2f}")
+
+    print("\nSentiments:")
+    sentiment_map = {0: 'negative', 1: 'neutral', 2: 'positive'}
+    for i, count in enumerate(sentiment_counts):
+        print(f"{sentiment_map[i]}: {count/valid:.2f}")
+
+    # Calculate class weights for emotions and sentiments
+    # - Emotion Weights: 1.0 / Emotion Counts
+    # - Sentiment Weights: 1.0 / Sentiment Counts
+    emotion_weights = 1.0 / emotion_counts
+    sentiment_weights = 1.0 / sentiment_counts
+
+    # Normalize weights
+    # - Emotion Weights: Emotion Weights / Sum of Emotion Weights
+    # - Sentiment Weights: Sentiment Weights / Sum of Sentiment Weights
+    emotion_weights = emotion_weights / emotion_weights.sum()
+    sentiment_weights = sentiment_weights / sentiment_weights.sum()
+
+    return emotion_weights, sentiment_weights
 
 ### ====================== Multimodal Trainer ====================== ###
 # - Input:
@@ -332,15 +394,34 @@ class MultimodalTrainer:
 
         self.current_train_loss = None
 
+        # Class Weights:
+        # - Emotion Weights: Tensor of size 7
+        # - Sentiment Weights: Tensor of size 3
+        print("Computing class weights...")
+        emotion_weights, sentiment_weights = compute_class_weights(train_loader.dataset)
+
+        # Move the class weights to the same device as the model
+        # - Device: GPU/CPU
+        print("Moving class weights to the model's device...")
+        device = next(model.parameters()).device
+
+        self.emotion_weights = emotion_weights.to(device)
+        self.sentiment_weights = sentiment_weights.to(device)
+
+        print(f"Emotion weights on device: {self.emotion_weights.device}")
+        print(f"Sentiments weights on device: {self.sentiment_weights.device}")
+
         # Loss Function: CrossEntropyLoss
         # - Label Smoothing: 0.05 (Regularization Technique)
         # - Emotion Classification: 7 Classes (Anger, Disgust, Sadness, Joy, Neutral, Surprise and Fear)
         # - Sentiment Classification: 3 Classes (Positive, Negative, Neutral)
         self.emtion_criterion = nn.CrossEntropyLoss(
-            label_smoothing = 0.05
+            label_smoothing = 0.05,
+            weight = self.emotion_weights
         )
         self.sentiment_criterion = nn.CrossEntropyLoss(
-            label_smoothing = 0.05
+            label_smoothing = 0.05,
+            weight = self.sentiment_weights
         )
 
     def log_metrics(self, loss, metrics = None, phase = "train"):
