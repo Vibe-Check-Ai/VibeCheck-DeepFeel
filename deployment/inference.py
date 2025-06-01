@@ -327,8 +327,7 @@ def process_local_video(video_path, model_dir="model_normalized"):
 
     for utterance in predictions["utterances"]:
         print("\nUtterance:")
-        print(f"""Start: {utterance['start_time']}s, End: {
-              utterance['end_time']}s""")
+        print(f"""Start: {utterance['start_time']}s, End: {utterance['end_time']}s""")
         print(f"Text: {utterance['text']}")
         print("\n Top Emotions:")
         for emotion in utterance['emotions']:
